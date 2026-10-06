@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D&D Battle Map Maker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f3f4f6;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Prevent scrolling of the whole page */
+        }
+
+        #toolbar {
+            background-color: #1f2937;
+            color: white;
+            padding: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            z-index: 10;
+            position: relative;
+        }
+
+        .tool-btn {
+            background-color: #374151;
+            border: none;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .tool-btn:hover {
+            background-color: #4b5563;
+        }
+
+        .tool-btn.active {
+            background-color: #3b82f6; /* Tailwind blue-500 */
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: calc(100vh - 60px); /* Subtract toolbar height */
+            overflow: auto; /* Allow scrolling within the canvas area if it's larger than the screen */
+            position: relative;
+            background-color: #e5e7eb; /* Light gray background behind canvas */
+            cursor: crosshair;
+        }
+
+        canvas {
+            background-color: white;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            /* Center the canvas initially */
+            margin: 20px auto;
+            display: block;
+        }
+
+        .settings-group {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-left: 10px;
+            border-left: 1px solid #4b5563;
+            padding-left: 15px;
+        }
+
+        input[type="number"], input[type="text"] {
+            background-color: #374151;
+            color: white;
+            border: 1px solid #4b5563;
+            padding: 4px;
+            border-radius: 4px;
+        }
+        
+        #textInputOverlay {
+            display: none;
+            position: absolute;
+            background: white;
+            border: 1px solid #ccc;
+            padding: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 20;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="toolbar">
+        <button class="tool-btn active" id="btn-wall" onclick="selectTool('wall')" title="Kreslit zdi (černé linky)">
+            <i class="fas fa-bars"></i> Zeď
+        </button>
+        <button class="tool-btn" id="btn-door" onclick="selectTool('door')" title="Vložit dveře (hnědý obdélník)">
+            <i class="fas fa-door-closed"></i> Dveře
+        </button>
+        <button class="tool-btn" id="btn-stairs" onclick="selectTool('stairs')" title="Vložit schody (čárovaná oblast)">
+            <i class="fas fa-stream"></i> Schody
+        </button>
+        <button class="tool-btn" id="btn-furniture" onclick="selectTool('furniture')" title="Vložit nábytek (čtvereček)">
+            <i class="fas fa-chair"></i> Nábytek
+        </button>
+        <button class="tool-btn" id="btn-text" onclick="selectTool('text')" title="Vložit text">
+            <i class="fas fa-font"></i> Text
+        </button>
+        <button class="tool-btn" id="btn-eraser" onclick="selectTool('eraser')" title="Guma (maže zdi a objekty)">
+            <i class="fas fa-eraser"></i> Guma
+        </button>
+
+        <div class="settings-group">
+            <label for="gridSize">Mřížka:</label>
+            <input type="number" id="gridSize" value="40" min="20" max="100" style="width: 60px;" onchange="updateGridSize()">
+            <span>px (1 = 5 stop/1 sáh)</span>
+        </div>
+        
+        <div class="settings-group">
+            <label for="mapCols">Šířka:</label>
+            <input type="number" id="mapCols" value="25" min="10" max="100" style="width: 50px;" onchange="updateCanvasSize()">
+            <label for="mapRows">Výška:</label>
+            <input type="number" id="mapRows" value="22" min="10" max="100" style="width: 50px;" onchange="updateCanvasSize()">
+        </div>
+
+        <div style="flex-grow: 1;"></div> <!-- Spacer -->
+
+        <button class="tool-btn" onclick="clearCanvas()" style="background-color: #ef4444;" title="Vymazat vše">
+            <i class="fas fa-trash"></i> Smazat
+        </button>
+        <button class="tool-btn" onclick="exportImage()" style="background-color: #10b981;" title="Uložit jako obrázek">
+            <i class="fas fa-download"></i> Export
+        </button>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="mapCanvas" width="1600" height="1200"></canvas>
+        <div id="textInputOverlay">
+            <input type="text" id="mapTextInput" placeholder="Zadejte text..." onkeydown="handleTextEnter(event)">
+            <button onclick="commitText()" class="bg-blue-500 text-white px-2 rounded">OK</button>
+            <button onclick="cancelText()" class="bg-gray-300 px-2 rounded">X</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvas-container');
+        const textOverlay = document.getElementById('textInputOverlay');
+        const textInput = document.getElementById('mapTextInput');
+
+        let gridSize = 40; // Size of one square in pixels
+        let currentTool = 'wall';
+        let isDrawing = false;
+        
+        // Arrays to store drawn elements so we can redraw them (e.g., when grid changes or erasing)
+        let walls = [];
+        let doors = [];
+        let stairs = [];
+        let texts = [];
+        let furnitures = [];
+
+        // Temporary variables for drawing in progress
+        let startX, startY;
+        let currentTextX, currentTextY;
+        
+        // Map size and drag state
+        let mapCols = 25;
+        let mapRows = 22;
+        let isDraggingText = false;
+        let draggedTextIndex = -1;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let editingTextIndex = -1;
+
+        // Initialize canvas
+        function init() {
+            updateCanvasSize();
+            
+            // Event listeners for drawing
+            canvas.addEventListener('mousedown', startDrawing);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stopDrawing);
+            canvas.addEventListener('mouseout', stopDrawing);
+            
+            // Adjust canvas size to window if needed, but keeping it fixed for map export is often better.
+            // Here we use a fixed logical size (1600x1200) that can scroll.
+        }
+
+        function drawGrid() {
+            ctx.save();
+            ctx.strokeStyle = '#e5e7eb'; // Light gray grid
+            ctx.lineWidth = 1;
+
+            // Vertical lines
+            for (let x = 0; x <= canvas.width; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+
+            // Horizontal lines
+            for (let y = 0; y <= canvas.height; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        function drawMap() {
+            // Clear entire canvas
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            drawGrid();
+
+            // Draw saved elements in order
+            drawStairsList();
+            drawFurnitureList();
+            drawWallsList();
+            drawDoorsList(); // Dveře se kreslí až po zdech, takže budou nad nimi
+            drawTextsList();
+        }
+
+        function selectTool(tool) {
+            currentTool = tool;
+            
+            // Update UI
+            document.querySelectorAll('.tool-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`btn-${tool}`).classList.add('active');
+            
+            // Change cursor
+            if (tool === 'eraser') {
+                canvas.style.cursor = 'cell';
+            } else if (tool === 'text') {
+                canvas.style.cursor = 'text';
+            } else {
+                canvas.style.cursor = 'crosshair';
+            }
+        }
+
+        function updateCanvasSize() {
+            mapCols = parseInt(document.getElementById('mapCols').value) || 25;
+            mapRows = parseInt(document.getElementById('mapRows').value) || 22;
+            canvas.width = mapCols * gridSize;
+            canvas.height = mapRows * gridSize;
+            drawMap();
+        }
+
+        function updateGridSize() {
+            const newSize = parseInt(document.getElementById('gridSize').value);
+            if (newSize >= 20 && newSize <= 100) {
+                gridSize = newSize;
+                updateCanvasSize(); // Redraw and resize everything
+            }
+        }
+
+        // Helper to snap coordinates to grid intersections or center
+        function snapToGrid(val, useCenter = false) {
+            const nearestIntersection = Math.round(val / gridSize) * gridSize;
+            if (useCenter) {
+                return Math.floor(val / gridSize) * gridSize + (gridSize / 2);
+            }
+            return nearestIntersection;
+        }
+
+        // Helper to find nearest grid line for door snapping
+        function getDoorSnap(rawX, rawY) {
+            let gridX = Math.floor(rawX / gridSize) * gridSize;
+            let gridY = Math.floor(rawY / gridSize) * gridSize;
+            let midX = gridX + gridSize / 2;
+            let midY = gridY + gridSize / 2;
+
+            let distToLeft = rawX - gridX;
+            let distToRight = gridX + gridSize - rawX;
+            let distToTop = rawY - gridY;
+            let distToBottom = gridY + gridSize - rawY;
+
+            let min = Math.min(distToLeft, distToRight, distToTop, distToBottom);
+
+            if (min === distToTop) return { x: midX, y: gridY, orientation: 'horizontal' };
+            if (min === distToBottom) return { x: midX, y: gridY + gridSize, orientation: 'horizontal' };
+            if (min === distToLeft) return { x: gridX, y: midY, orientation: 'vertical' };
+            return { x: gridX + gridSize, y: midY, orientation: 'vertical' };
+        }
+
+        function startDrawing(e) {
+            const rect = canvas.getBoundingClientRect();
+            // Calculate coordinates relative to canvas, considering scroll
+            const rawX = e.clientX - rect.left;
+            const rawY = e.clientY - rect.top;
+
+            if (currentTool === 'text') {
+                // Check if clicking existing text to drag or edit it
+                const hitRadiusY = 15;
+                let clickedText = -1;
+                for (let i = texts.length - 1; i >= 0; i--) {
+                    const t = texts[i];
+                    ctx.font = 'bold 16px Arial';
+                    let textMetrics = ctx.measureText(t.text);
+                    let w = textMetrics.width;
+                    // Text is left-aligned, so X goes from t.x to t.x + w
+                    if (rawX >= t.x - 10 && rawX <= t.x + w + 10 && Math.abs(t.y - rawY) < hitRadiusY) {
+                        clickedText = i;
+                        break;
+                    }
+                }
+                
+                if (clickedText !== -1) {
+                    isDraggingText = true;
+                    draggedTextIndex = clickedText;
+                    dragStartX = rawX;
+                    dragStartY = rawY;
+                } else {
+                    handleTextClick(e, rawX, rawY);
+                }
+                return;
+            }
+
+            isDrawing = true;
+
+            if (currentTool === 'wall') {
+                startX = snapToGrid(rawX);
+                startY = snapToGrid(rawY);
+            } else if (currentTool === 'door' || currentTool === 'stairs') {
+                // For doors and stairs, snap to grid cells (top-left corner)
+                startX = Math.floor(rawX / gridSize) * gridSize;
+                startY = Math.floor(rawY / gridSize) * gridSize;
+            } else if (currentTool === 'eraser') {
+                eraseElement(rawX, rawY);
+            }
+        }
+
+        function draw(e) {
+            const rect = canvas.getBoundingClientRect();
+            const rawX = e.clientX - rect.left;
+            const rawY = e.clientY - rect.top;
+
+            // Handle text dragging
+            if (currentTool === 'text' && isDraggingText) {
+                texts[draggedTextIndex].x = snapToGrid(rawX) + 5;
+                texts[draggedTextIndex].y = snapToGrid(rawY, true);
+                drawMap();
+                return;
+            }
+
+            if (!isDrawing) return;
+            
+            // Redraw everything saved so far
+            drawMap();
+
+            // Draw preview of current action
+            if (currentTool === 'wall') {
+                let endX = snapToGrid(rawX);
+                let endY = snapToGrid(rawY);
+                
+                // Force straight lines (ortho mode)
+                if (Math.abs(endX - startX) > Math.abs(endY - startY)) {
+                    endY = startY;
+                } else {
+                    endX = startX;
+                }
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(startX, startY);
+                ctx.lineTo(endX, endY);
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 5; // Pevná tloušťka zdi
+                ctx.lineCap = 'round';
+                ctx.stroke();
+
+                // Draw wall length info tooltip
+                let lengthSquares = Math.round(Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2)) / gridSize);
+                if (lengthSquares > 0) {
+                    let midX = (startX + endX) / 2;
+                    let midY = (startY + endY) / 2;
+                    
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                    ctx.fillRect(midX + 15, midY - 25, 65, 24);
+                    
+                    ctx.fillStyle = 'black';
+                    ctx.font = '14px Arial';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(`${lengthSquares} sáhů`, midX + 20, midY - 13);
+                }
+                ctx.restore();
+            } else if (currentTool === 'door') {
+                // Preview door snapped to grid line
+                let snap = getDoorSnap(rawX, rawY);
+                
+                ctx.save();
+                ctx.fillStyle = 'rgba(139, 69, 19, 0.5)'; // Transparent brown for preview
+                if (snap.orientation === 'horizontal') {
+                    ctx.fillRect(snap.x - (gridSize/2) + 4, snap.y - 4, gridSize - 8, 8);
+                } else {
+                    ctx.fillRect(snap.x - 4, snap.y - (gridSize/2) + 4, 8, gridSize - 8);
+                }
+                ctx.restore();
+            } else if (currentTool === 'stairs') {
+                // Preview stairs area
+                let currentX = Math.floor(rawX / gridSize) * gridSize;
+                let currentY = Math.floor(rawY / gridSize) * gridSize;
+                
+                // Calculate width and height based on drag
+                let w = currentX - startX + gridSize;
+                let h = currentY - startY + gridSize;
+                
+                // Handle dragging in negative directions
+                if (currentX < startX) { w = startX - currentX + gridSize; }
+                if (currentY < startY) { h = startY - currentY + gridSize; }
+                
+                let rectX = Math.min(startX, currentX);
+                let rectY = Math.min(startY, currentY);
+
+                ctx.save();
+                ctx.fillStyle = 'rgba(100, 100, 100, 0.3)';
+                ctx.fillRect(rectX, rectY, w, h);
+                ctx.restore();
+            } else if (currentTool === 'furniture') {
+                let cellX = Math.floor(rawX / gridSize) * gridSize;
+                let cellY = Math.floor(rawY / gridSize) * gridSize;
+                
+                ctx.save();
+                ctx.fillStyle = 'rgba(210, 180, 140, 0.5)';
+                ctx.fillRect(cellX + 4, cellY + 4, gridSize - 8, gridSize - 8);
+                ctx.restore();
+            } else if (currentTool === 'eraser') {
+                eraseElement(rawX, rawY);
+            }
+        }
+
+        function stopDrawing(e) {
+            const rect = canvas.getBoundingClientRect();
+            const rawX = e.clientX - rect.left;
+            const rawY = e.clientY - rect.top;
+
+            // Stop text dragging/editing
+            if (currentTool === 'text' && isDraggingText) {
+                let dist = Math.hypot(rawX - dragStartX, rawY - dragStartY);
+                if (dist < 5) {
+                    // Byla to jen klikačka na existující text (žádné tažení) -> upravíme ho
+                    editingTextIndex = draggedTextIndex;
+                    textInput.value = texts[editingTextIndex].text;
+                    currentTextX = texts[editingTextIndex].x;
+                    currentTextY = texts[editingTextIndex].y;
+                    
+                    textOverlay.style.left = e.clientX + 'px';
+                    textOverlay.style.top = e.clientY + 'px';
+                    textOverlay.style.display = 'block';
+                    textInput.focus();
+                }
+                isDraggingText = false;
+                draggedTextIndex = -1;
+                return;
+            }
+
+            if (!isDrawing) return;
+            isDrawing = false;
+
+            if (currentTool === 'eraser') return;
+
+            if (currentTool === 'wall') {
+                let endX = snapToGrid(rawX);
+                let endY = snapToGrid(rawY);
+                
+                // Force straight lines
+                if (Math.abs(endX - startX) > Math.abs(endY - startY)) {
+                    endY = startY;
+                } else {
+                    endX = startX;
+                }
+                
+                // Rozdělení zdi na úseky po 1 sáhu (1 mřížkový čtverec)
+                if (startX !== endX || startY !== endY) {
+                    let stepX = endX !== startX ? Math.sign(endX - startX) * gridSize : 0;
+                    let stepY = endY !== startY ? Math.sign(endY - startY) * gridSize : 0;
+                    
+                    let cx = startX;
+                    let cy = startY;
+                    
+                    while (cx !== endX || cy !== endY) {
+                        let nx = cx + stepX;
+                        let ny = cy + stepY;
+                        
+                        let sx = Math.min(cx, nx);
+                        let sy = Math.min(cy, ny);
+                        let ex = Math.max(cx, nx);
+                        let ey = Math.max(cy, ny);
+                        
+                        let exists = walls.some(w => w.x1 === sx && w.y1 === sy && w.x2 === ex && w.y2 === ey);
+                        if (!exists) {
+                            walls.push({ x1: sx, y1: sy, x2: ex, y2: ey });
+                        }
+                        
+                        cx = nx;
+                        cy = ny;
+                    }
+                }
+            } else if (currentTool === 'door') {
+                let snap = getDoorSnap(rawX, rawY);
+                doors.push(snap);
+            } else if (currentTool === 'stairs') {
+                let endX = Math.floor(rawX / gridSize) * gridSize;
+                let endY = Math.floor(rawY / gridSize) * gridSize;
+                
+                let w = Math.abs(endX - startX) + gridSize;
+                let h = Math.abs(endY - startY) + gridSize;
+                let rectX = Math.min(startX, endX);
+                let rectY = Math.min(startY, endY);
+
+                // Určíme směr schodů podle toho, kterým směrem (x nebo y) jsme označili větší oblast
+                let dir = (w > h) ? 'v' : 'h'; // v = vertikální čáry (schody jdou do boku), h = horizontální čáry (schody jdou nahoru/dolů)
+                
+                // Rozdělení schodů na 1x1 bloky
+                for (let x = rectX; x < rectX + w; x += gridSize) {
+                    for (let y = rectY; y < rectY + h; y += gridSize) {
+                        // Odstraníme starý záznam schodů na tomto místě a nahradíme jej novým s novým směrem
+                        stairs = stairs.filter(s => !(s.x === x && s.y === y));
+                        stairs.push({ x: x, y: y, dir: dir });
+                    }
+                }
+            } else if (currentTool === 'furniture') {
+                let cellX = Math.floor(rawX / gridSize) * gridSize;
+                let cellY = Math.floor(rawY / gridSize) * gridSize;
+                
+                // Přepsání nábytku na stejném místě, aby nebyl duplicitně nad sebou
+                furnitures = furnitures.filter(f => !(f.x === cellX && f.y === cellY));
+                furnitures.push({ x: cellX, y: cellY });
+            }
+            
+            drawMap();
+        }
+
+        function drawWallsList() {
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 5; // Pevná tloušťka zdi
+
+            walls.forEach(wall => {
+                ctx.beginPath();
+                ctx.moveTo(wall.x1, wall.y1);
+                ctx.lineTo(wall.x2, wall.y2);
+                ctx.stroke();
+            });
+            ctx.restore();
+        }
+
+        function drawDoorsList() {
+            ctx.save();
+            ctx.fillStyle = '#8B4513'; // Hnědá barva dveří
+            doors.forEach(d => {
+                if (d.orientation === 'horizontal') {
+                    ctx.fillRect(d.x - (gridSize/2) + 4, d.y - 4, gridSize - 8, 8);
+                } else {
+                    ctx.fillRect(d.x - 4, d.y - (gridSize/2) + 4, 8, gridSize - 8);
+                }
+            });
+            ctx.restore();
+        }
+
+        function drawStairsList() {
+            ctx.save();
+            stairs.forEach(s => {
+                // Pozadí schodů
+                ctx.fillStyle = 'rgba(156, 163, 175, 0.4)'; // poloprůhledná šedá
+                ctx.fillRect(s.x, s.y, gridSize, gridSize);
+                
+                ctx.strokeStyle = '#4b5563'; // tmavě šedá
+                ctx.lineWidth = 1.5;
+                
+                // Čáry schodů (naznačení stupňů)
+                if (s.dir === 'v') {
+                    for (let i = 1; i < 4; i++) {
+                        ctx.beginPath();
+                        ctx.moveTo(s.x + (gridSize / 4) * i, s.y);
+                        ctx.lineTo(s.x + (gridSize / 4) * i, s.y + gridSize);
+                        ctx.stroke();
+                    }
+                } else {
+                    for (let i = 1; i < 4; i++) {
+                        ctx.beginPath();
+                        ctx.moveTo(s.x, s.y + (gridSize / 4) * i);
+                        ctx.lineTo(s.x + gridSize, s.y + (gridSize / 4) * i);
+                        ctx.stroke();
+                    }
+                }
+                
+                // Rámeček kolem každého čtverečku schodů
+                ctx.strokeRect(s.x, s.y, gridSize, gridSize);
+            });
+            ctx.restore();
+        }
+
+        function drawFurnitureList() {
+            ctx.save();
+            ctx.fillStyle = '#D2B48C'; // Světlé dřevo
+            ctx.strokeStyle = '#8B4513';
+            ctx.lineWidth = 2;
+
+            furnitures.forEach(f => {
+                let p = 4; // padding od okraje mřížky
+                let size = gridSize - p * 2;
+                
+                ctx.fillRect(f.x + p, f.y + p, size, size);
+                ctx.strokeRect(f.x + p, f.y + p, size, size);
+                
+                // Křížek naznačující krabici/objekt
+                ctx.beginPath();
+                ctx.moveTo(f.x + p, f.y + p);
+                ctx.lineTo(f.x + p + size, f.y + p + size);
+                ctx.moveTo(f.x + p + size, f.y + p);
+                ctx.lineTo(f.x + p, f.y + p + size);
+                ctx.stroke();
+            });
+            ctx.restore();
+        }
+
+        function handleTextClick(e, rawX, rawY) {
+            editingTextIndex = -1;
+            // Zarovnání k levému okraji buňky (+5px odsazení) a na střed vertikálně
+            currentTextX = snapToGrid(rawX) + 5; 
+            currentTextY = snapToGrid(rawY, true);
+
+            // Position overlay
+            textOverlay.style.left = (e.clientX) + 'px';
+            textOverlay.style.top = (e.clientY) + 'px';
+            textOverlay.style.display = 'block';
+            textInput.value = '';
+            textInput.focus();
+        }
+
+        function commitText() {
+            const val = textInput.value.trim();
+            if (val) {
+                if (editingTextIndex > -1) {
+                    texts[editingTextIndex].text = val;
+                } else {
+                    texts.push({ text: val, x: currentTextX, y: currentTextY });
+                }
+            } else if (editingTextIndex > -1) {
+                // Pokud text smažeme v editaci na prázdný, odstraní se z mapy
+                texts.splice(editingTextIndex, 1);
+            }
+            closeTextOverlay();
+            drawMap();
+        }
+
+        function cancelText() {
+            closeTextOverlay();
+        }
+
+        function closeTextOverlay() {
+            textOverlay.style.display = 'none';
+        }
+
+        function handleTextEnter(e) {
+            if (e.key === 'Enter') {
+                commitText();
+            } else if (e.key === 'Escape') {
+                cancelText();
+            }
+        }
+
+        function drawTextsList() {
+            ctx.save();
+            ctx.font = 'bold 16px Arial';
+            ctx.fillStyle = '#b91c1c'; // Red-700 for visibility
+            ctx.textAlign = 'left';    // Zarovnání vlevo
+            ctx.textBaseline = 'middle';
+
+            texts.forEach(t => {
+                // Add a small white outline for readability
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 3;
+                ctx.strokeText(t.text, t.x, t.y);
+                ctx.fillText(t.text, t.x, t.y);
+            });
+            ctx.restore();
+        }
+
+        // Helper function for collision detection with line segments (for erasing walls)
+        function distToSegmentSquared(p, v, w) {
+            let l2 = (w.x - v.x) * (w.x - v.x) + (w.y - v.y) * (w.y - v.y);
+            if (l2 === 0) return (p.x - v.x) * (p.x - v.x) + (p.y - v.y) * (p.y - v.y);
+            let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            return (p.x - (v.x + t * (w.x - v.x))) ** 2 + (p.y - (v.y + t * (w.y - v.y))) ** 2;
+        }
+
+        function eraseElement(x, y) {
+            const eraseRadius = 15;
+
+            // Priorita mazání: 1. Texty, 2. Dveře, 3. Zdi, 4. Schody.
+            // Pokaždé když najdeme shodu, smažeme jen tu jednu vrstvu a vrátíme se. 
+            // Díky tomu se např. nesmažou dveře i zeď zároveň při jednom kliknutí.
+
+            // 1. Texty
+            let textHit = false;
+            texts = texts.filter(t => {
+                ctx.font = 'bold 16px Arial';
+                let w = ctx.measureText(t.text).width;
+                // Hitbox je nastavený od levého zarovnání
+                let hit = (x >= t.x - 10 && x <= t.x + w + 10 && y >= t.y - 15 && y <= t.y + 15);
+                if (hit) textHit = true;
+                return !hit;
+            });
+            if (textHit) { drawMap(); return; }
+
+            // 1.5 Nábytek
+            let furnitureHit = false;
+            furnitures = furnitures.filter(f => {
+                let hit = (x >= f.x && x <= f.x + gridSize && y >= f.y && y <= f.y + gridSize);
+                if (hit) furnitureHit = true;
+                return !hit;
+            });
+            if (furnitureHit) { drawMap(); return; }
+
+            // 2. Dveře
+            let doorHit = false;
+            doors = doors.filter(d => {
+                let hit = false;
+                let g = gridSize;
+                if (d.orientation === 'horizontal') {
+                    hit = (x >= d.x - g/2 && x <= d.x + g/2 && y >= d.y - 10 && y <= d.y + 10);
+                } else {
+                    hit = (x >= d.x - 10 && x <= d.x + 10 && y >= d.y - g/2 && y <= d.y + g/2);
+                }
+                if (hit) doorHit = true;
+                return !hit;
+            });
+            if (doorHit) { drawMap(); return; }
+
+            // 3. Zdi (rozdělené po jednom sáhu, takže se maže vždy jen kousek u gumy)
+            let wallHit = false;
+            walls = walls.filter(w => {
+                const distSq = distToSegmentSquared({x, y}, {x: w.x1, y: w.y1}, {x: w.x2, y: w.y2});
+                let hit = distSq <= eraseRadius * eraseRadius;
+                if (hit) wallHit = true;
+                return !hit;
+            });
+            if (wallHit) { drawMap(); return; }
+
+            // 4. Schody (rozdělené na 1x1 čtverce, maže se vždy jen ten zasažený)
+            let stairHit = false;
+            stairs = stairs.filter(s => {
+                let hit = (x >= s.x && x <= s.x + gridSize && y >= s.y && y <= s.y + gridSize);
+                if (hit) stairHit = true;
+                return !hit;
+            });
+            if (stairHit) { drawMap(); return; }
+        }
+
+        function clearCanvas() {
+            if (confirm("Opravdu chcete vymazat celou mapu?")) {
+                walls = [];
+                doors = [];
+                stairs = [];
+                texts = [];
+                furnitures = [];
+                drawMap();
+            }
+        }
+
+        function exportImage() {
+            // Create a temporary link
+            const link = document.createElement('a');
+            link.download = 'dnd-battlemap.png';
+            
+            // Generate image data from canvas
+            // Use quality 1.0 for highest resolution
+            link.href = canvas.toDataURL('image/png', 1.0);
+            
+            // Trigger download
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Initialize the application on load
+        window.onload = init;
+
+    </script>
+</body>
+</html>
